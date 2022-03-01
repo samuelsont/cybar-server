@@ -77,8 +77,8 @@ def logger(logfolder='logs'):
         if console and console_first:
             print(line())
     
-        #with open(logfile, 'a') as lf:
-        #    lf.write(line() + "\n")
+        with open(logfile, 'a') as lf:
+            lf.write(line() + "\n")
         
         if console and not console_first:
             print(line())
