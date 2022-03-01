@@ -72,13 +72,15 @@ def logger(logfolder='logs'):
     """
     
     def log_line(txt, console=False, console_first=False, at="info"):
-        line = lambda: "{} at={} {}".format(datetime.now(), at, txt)
+        if at != "":
+            at = " at={}".format(at)
+        line = lambda: "{}:{} {}".format(datetime.now(), at, txt)
         
         if console and console_first:
             print(line())
     
         with open(logfile, 'a') as lf:
-            lf.write(line() + "\n")
+            print(line() + "\n", file=lf)
         
         if console and not console_first:
             print(line())
@@ -120,7 +122,7 @@ Node: {sys.node}
 Logs:""".format(sys = platform.uname())
 
 log = logger()
-log(sysinfo)
+log(sysinfo, at="")
 log_console = partial(log, console=True, console_first=True)
 
 
@@ -159,16 +161,18 @@ def after_request(response):
     ga["request_tstamp"] = g.request_tstamp
     ga["request_time"] = g.request_time
     
-    @response.call_on_close
-    def after_response():
-        SEC_TO_MILLISECONDS = 1000
-        nonlocal ga
-        ga["response_tstamp"], ga["response_time"] = datetime.now(), time.process_time()
-        service = ga["response_tstamp"] - ga["request_tstamp"]
-        ga["service"] = "{:.3f}ms".format(service.total_seconds() * SEC_TO_MILLISECONDS)
-        
-        message = ' '.join(list("=".join((key,str(value))) for key, value in ga.items()))
-        log_console(message)
+    if "bit" in request.path:
+    
+        @response.call_on_close
+        def after_response():
+            SEC_TO_MILLISECONDS = 1000
+            nonlocal ga
+            ga["response_tstamp"], ga["response_time"] = datetime.now(), time.process_time()
+            service = ga["response_tstamp"] - ga["request_tstamp"]
+            ga["service"] = "{:.3f}ms".format(service.total_seconds() * SEC_TO_MILLISECONDS)
+            
+            message = ' '.join(list("=".join((key,str(value))) for key, value in ga.items()))
+            log_console(message)
     
     return response
     
@@ -180,7 +184,8 @@ def teardown_request(e):
     This function must not fail - use try/except blocks to handle exceptions.
     """
     
-    log_console('Request finished. Context torn down.')
+    if "bit" in request.path:
+        log_console('Request to path={} finished. Context torn down.'.format(request.path))
 
 
 @app.route('/<bit>', methods=['GET'])
