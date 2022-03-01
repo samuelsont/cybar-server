@@ -51,7 +51,6 @@ nar = {
 
 import platform, os
 import functools
-import requests
 import time
 
 from datetime import datetime
