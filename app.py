@@ -1,8 +1,10 @@
 import os
 import flask
+from flask import Flask, request, Response, g
+from functools import partial
 
 
-app = flask.Flask(__name__) 
+app = Flask(__name__) 
 app.config["DEBUG"] = True 
 
 nar = {
@@ -47,13 +49,155 @@ nar = {
 }
 
 
-@app.route('/<bit>', methods=['GET']) 
+import platform, os
+import functools
+import requests
+import time
+
+from datetime import datetime
+
+
+# util functions
+def logger(logfolder='logs'):
+    """Defines folder and file name for logging and returns logger func.
+    
+    If specified folder does not exist, it creates it. In addition, it closes
+    over logfile variable giving read-only access to nested log_line func.
+    Returns a log_line function that will consistently write log strings
+    to the logfile in the specified logfolder.
+    
+      Typical usage example:
+      
+      log_line = logger("logfolder")
+      log_line("log this line")
+    """
+    
+    def log_line(txt, console=False, console_first=False, at="info"):
+        line = lambda: "{} at={} {}".format(datetime.now(), at, txt)
+        
+        if console and console_first:
+            print(line())
+    
+        #with open(logfile, 'a') as lf:
+        #    lf.write(line() + "\n")
+        
+        if console and not console_first:
+            print(line())
+    
+    os.makedirs(logfolder, exist_ok=True)
+    tstamp = datetime.now().strftime("%d.%m.%YT%H%M%S.%f%z")
+    logfile = logfolder + "/log_{}.txt".format(tstamp)
+    
+    return log_line
+
+def headers_length(headers):
+    COLON_LEN = 1
+    WHITESPACE_LEN = 1
+    CRLF_LEN = 2
+    return sum(len(key) + COLON_LEN + WHITESPACE_LEN + len(value) + CRLF_LEN for key, value in headers.items()) + CRLF_LEN
+
+def request_length(request):
+    # get length of first line: "{method} {path} HTTP/1.1{CRLF}"
+    first_line = len(request.method) + len(request.path) + 12  # magic 12 is len of request protocol
+    headers_len = headers_length(request.headers)
+    content_len = int(request.headers.get("content-length", 0))
+    
+    # add all together
+    return first_line + headers_len + content_len
+
+def response_length(response):
+    # get length of first line: "HTTP/1.0 {status}{CRLF}"
+    first_line = len(response.status) + 11  # magic 11 is len of protocol and whitespaces
+    headers_len = headers_length(response.headers)
+    content_len = int(response.headers.get("content-length", 0))
+    
+    # add all together
+    return first_line + headers_len + content_len
+
+sysinfo = """System Information
+System: {sys.system} {sys.version}, {sys.processor}
+Node: {sys.node}
+
+Logs:""".format(sys = platform.uname())
+
+log = logger()
+log(sysinfo)
+log_console = partial(log, console=True, console_first=True)
+
+
+@app.before_request
+def before_request():
+    """This is called before the request is handled by the route(view) function.
+    
+    Store request receipt timestamp in request context variable: g.
+    """
+    
+    g.request_tstamp, g.request_time = datetime.now(), time.process_time()
+    
+
+@app.after_request
+def after_request(response):
+    """ """
+    
+    # request details
+    ga = dict()
+    ga["method"] = request.method
+    ga["path"] = request.path
+    ga["status"] = response.status_code
+    
+    # remote user
+    ga["ip"] = request.remote_addr
+    ga["host"] = request.host
+    ga["protocol"] = request.scheme
+    ga["client"] = "{} v{}".format(request.user_agent.browser, request.user_agent.version)
+    ga["platform"] = request.user_agent.platform
+    
+    # packet size
+    ga["request_bytes"] = request_length(request)
+    ga["response_bytes"] = response_length(response)
+    
+    # timing
+    ga["request_tstamp"] = g.request_tstamp
+    ga["request_time"] = g.request_time
+    
+    @response.call_on_close
+    def after_response():
+        SEC_TO_MILLISECONDS = 1000
+        nonlocal ga
+        ga["response_tstamp"], ga["response_time"] = datetime.now(), time.process_time()
+        service = ga["response_tstamp"] - ga["request_tstamp"]
+        ga["service"] = "{:.3f}ms".format(service.total_seconds() * SEC_TO_MILLISECONDS)
+        
+        message = ' '.join(list("=".join((key,str(value))) for key, value in ga.items()))
+        log_console(message)
+    
+    return response
+    
+
+@app.teardown_request
+def teardown_request(e):
+    """This is called at the very end of each request regardless of prior exceptions.
+    
+    This function must not fail - use try/except blocks to handle exceptions.
+    """
+    
+    log_console('Request finished. Context torn down.')
+
+
+@app.route('/<bit>', methods=['GET'])
 def home(bit):
+    
     if bit in nar:
-        return nar[bit]
+        retval = nar[bit]
         
     else:
-        return f"Key {bit} does not exist."
+        retval = f"Key {bit} does not exist. Check for errors in the path."
+    
+        if "bit" in bit:
+            log("Error occurred. Key {} requested but not found".format(bit), at="error")
+    
+    return retval
+    
 
 if (__name__ == "__main__"):
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
